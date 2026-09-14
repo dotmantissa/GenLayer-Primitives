@@ -1,0 +1,15 @@
+[project]
+name = "sla-enforcement-oracle"
+version = "1.0.0"
+description = "SLA Enforcement Oracle -- GenLayer primitive for on-chain SLA adjudication"
+requires-python = ">=3.11"
+
+[project.dependencies]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.backends.legacy:build"

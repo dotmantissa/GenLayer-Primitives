@@ -1,0 +1,21 @@
+{
+  "network": "studionet",
+  "contractName": "SLAEnforcementOracle",
+  "contractAddress": "0x8C823BD8089ceE09be130C4E71F42D46DF863e01",
+  "deployerAddress": "0xBC1399c55538eC034d4Da550C03c34Ae0C357f53",
+  "deploymentTransaction": "0xfb6ac85813974e18e38d33037093270aca80c3ea45bd70e5c7879faebfd276c5",
+  "rpc": "https://studio.genlayer.com/api",
+  "chainId": "61999",
+  "runner": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6",
+  "schemaMethods": [
+    "compute_max_penalty",
+    "execute_penalty",
+    "get_claim",
+    "get_claim_count",
+    "get_provider_stake",
+    "get_sla",
+    "reclaim_stake",
+    "register_sla",
+    "submit_claim"
+  ]
+}
