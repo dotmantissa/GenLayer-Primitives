@@ -16,5 +16,5 @@ This repository houses reusable, production-ready primitives that leverage GenLa
 
 Each primitive is developed and maintained on its own dedicated branch containing the complete contract, test suite, and integration documentation:
 
-- **SLA Enforcement Oracle** (Branch: ):
+- **SLA Enforcement Oracle** (Branch: `sla-enforcement-oracle`):
   Autonomous Service Level Agreement adjudication and penalty enforcement on-chain. Service providers lock performance stakes, consumers submit claims with public web evidence, and GenLayer validator committees independently adjudicate breaches and transfer penalties.
