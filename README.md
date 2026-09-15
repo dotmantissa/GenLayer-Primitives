@@ -18,3 +18,6 @@ Each primitive is developed and maintained on its own dedicated branch containin
 
 - **SLA Enforcement Oracle** (Branch: `sla-enforcement-oracle`):
   Autonomous Service Level Agreement adjudication and penalty enforcement on-chain. Service providers lock performance stakes, consumers submit claims with public web evidence, and GenLayer validator committees independently adjudicate breaches and transfer penalties.
+
+- **Agent Task Escrow** (Branch: `agent-task-escrow`):
+  Autonomous task escrow and deliverable adjudication primitive for the agentic economy. Clients deposit escrow funds with natural-language task specifications and explicit acceptance criteria rubrics. GenLayer validator committees independently retrieve deliverables, score each acceptance criterion on substantive compliance, calculate proportional partial payouts, and execute on-chain settlement.
