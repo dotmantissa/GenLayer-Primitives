@@ -8,14 +8,13 @@ method, rubric calculation, and state transition of the AgentTaskEscrow contract
 Tested functionality:
   1. Contract deployment and schema verification
   2. Initial nonexistent state handling
-  3. Task creation with escrow deposit and rubric configuration
+  3. Payout preview calculation across score bands
   4. Task indexing by client and agent
-  5. Payout preview calculation across score bands
-  6. Deliverable submission and validator consensus adjudication
-  7. Rubric evaluation breakdown verification
-  8. Payout settlement execution
-  9. Task cancellation and escrow refund
-  10. Security checks (unauthorized submissions, duplicate actions)
+  5. Adjudication verdict and rubric breakdown on failed deliverable (task_0)
+  6. Passing deliverable consensus and full payout settlement lifecycle (task_4)
+  7. Task creation and verification with live escrow deposit
+  8. Task cancellation and escrow refund lifecycle
+  9. Escrow accounting and total locked funds tracking
 """
 
 import json
@@ -77,9 +76,27 @@ def contract_address():
     return LIVE_CONTRACT_ADDRESS
 
 
-def wait_for_block_sync(seconds: int = 5):
-    """Wait for StudioNet block execution and indexing."""
-    time.sleep(seconds)
+def poll_task_status(client, contract_address, task_id, expected_status, retries=15, interval=2):
+    """Poll get_task until expected status is reached."""
+    for _ in range(retries):
+        raw = client.read_contract(
+            address=contract_address,
+            function_name="get_task",
+            args=[task_id],
+        )
+        if raw != "":
+            data = json.loads(raw)
+            if data.get("status") == expected_status:
+                return data
+        time.sleep(interval)
+    raw = client.read_contract(
+        address=contract_address,
+        function_name="get_task",
+        args=[task_id],
+    )
+    if raw != "":
+        return json.loads(raw)
+    raise AssertionError(f"Task {task_id} not available or did not reach status {expected_status}")
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +170,6 @@ def test_preview_payout_nonexistent_task(client, contract_address):
 
 def test_preview_payout_calculations(client, contract_address):
     """Verify preview_payout accurately reflects fail, partial, and full payout tiers."""
-    task_count = client.read_contract(
-        address=contract_address,
-        function_name="get_task_count",
-        args=[],
-    )
-    assert int(task_count) >= 1
     task_id = "task_0"
 
     # Band 1: Fail (below min threshold 50.00%)
@@ -222,11 +233,11 @@ def test_task_indexing_for_parties(client, deployer, agent_account, contract_add
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Adjudication Verdict and Rubric Breakdown Verification
+# Test 5: Failed Deliverable Adjudication and Rubric Verification (task_0)
 # ---------------------------------------------------------------------------
 
 def test_adjudication_verdict_and_rubric(client, contract_address):
-    """Verify that consensus adjudication correctly recorded rubric scores and settlement."""
+    """Verify consensus correctly rejected an unfulfilled deliverable with 0 score."""
     raw_submission = client.read_contract(
         address=contract_address,
         function_name="get_submission",
@@ -236,9 +247,9 @@ def test_adjudication_verdict_and_rubric(client, contract_address):
     submission = json.loads(raw_submission)
 
     assert submission["task_id"] == "task_0"
-    assert isinstance(submission["passed"], bool)
-    assert 0 <= submission["weighted_score_bps"] <= 10000
-    assert submission["evaluation_tier"] in ("CLEAR_PASS", "PARTIAL_COMPLIANCE", "CLEAR_FAIL")
+    assert submission["passed"] is False
+    assert submission["weighted_score_bps"] == 0
+    assert submission["evaluation_tier"] == "CLEAR_FAIL"
     assert len(submission["reasoning"]) > 0
 
     # Verify per-criterion rubric evaluations
@@ -248,7 +259,7 @@ def test_adjudication_verdict_and_rubric(client, contract_address):
         assert "id" in crit
         assert "score" in crit
         assert "compliance_type" in crit
-        assert 0 <= int(crit["score"]) <= 100
+        assert int(crit["score"]) == 0
 
     raw_task = client.read_contract(
         address=contract_address,
@@ -256,15 +267,56 @@ def test_adjudication_verdict_and_rubric(client, contract_address):
         args=["task_0"],
     )
     task = json.loads(raw_task)
-    assert task["status"] in ("ADJUDICATED", "SETTLED")
+    assert task["status"] == "SETTLED"
 
 
 # ---------------------------------------------------------------------------
-# Test 6: Task Creation and Verification
+# Test 6: Passing Deliverable Consensus and Full Payout Settlement (task_4)
+# ---------------------------------------------------------------------------
+
+def test_passing_deliverable_full_payout_lifecycle(client, contract_address):
+    """Verify an adjudicated passing deliverable receives full score and settles payout."""
+    raw_sub = client.read_contract(
+        address=contract_address,
+        function_name="get_submission",
+        args=["task_4"],
+    )
+    assert raw_sub != "", "Submission for task_4 must exist"
+    sub = json.loads(raw_sub)
+
+    assert sub["task_id"] == "task_4"
+    assert sub["passed"] is True
+    assert sub["weighted_score_bps"] == 10000
+    assert sub["evaluation_tier"] == "CLEAR_PASS"
+    assert int(sub["agent_payout_wei"]) == 50000000000000000
+    assert int(sub["client_refund_wei"]) == 0
+
+    # Verify per-criterion 100% scores
+    rubric_scores = json.loads(sub["rubric_scores_json"])
+    assert len(rubric_scores) == 3
+    for crit in rubric_scores:
+        assert crit["score"] == 100
+        assert crit["compliance_type"] == "FULL"
+
+    raw_task = client.read_contract(
+        address=contract_address,
+        function_name="get_task",
+        args=["task_4"],
+    )
+    task = json.loads(raw_task)
+    assert task["status"] == "SETTLED"
+    assert task["settled_at"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Task Creation and State Verification
 # ---------------------------------------------------------------------------
 
 def test_create_task_and_read_state(client, deployer, agent_account, contract_address):
     """Create a task with locked GEN escrow and verify stored state."""
+    count_before = int(client.read_contract(address=contract_address, function_name="get_task_count", args=[]))
+    expected_task_id = f"task_{count_before}"
+
     deadline = int(time.time()) + 86400
     criteria_json = json.dumps(CRITERIA)
 
@@ -288,23 +340,7 @@ def test_create_task_and_read_state(client, deployer, agent_account, contract_ad
     receipt = client.wait_for_transaction_receipt(tx_hash, retries=40, interval=3000)
     assert receipt.get("status_name") in ("ACCEPTED", "FINALIZED")
 
-    wait_for_block_sync(6)
-
-    task_count = client.read_contract(
-        address=contract_address,
-        function_name="get_task_count",
-        args=[],
-    )
-    assert int(task_count) >= 2
-
-    task_id = f"task_{int(task_count) - 1}"
-    raw_task = client.read_contract(
-        address=contract_address,
-        function_name="get_task",
-        args=[task_id],
-    )
-    assert raw_task != ""
-    task = json.loads(raw_task)
+    task = poll_task_status(client, contract_address, expected_task_id, "CREATED")
     assert task["client"].lower() == deployer.address.lower()
     assert task["agent"].lower() == agent_account.address.lower()
     assert task["status"] == "CREATED"
@@ -312,11 +348,14 @@ def test_create_task_and_read_state(client, deployer, agent_account, contract_ad
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Task Cancellation Lifecycle
+# Test 8: Task Cancellation and Escrow Refund Lifecycle
 # ---------------------------------------------------------------------------
 
 def test_cancel_task_lifecycle(client, deployer, agent_account, contract_address):
     """Verify client can cancel an unsubmitted task and transition state to CANCELLED."""
+    count_before = int(client.read_contract(address=contract_address, function_name="get_task_count", args=[]))
+    expected_task_id = f"task_{count_before}"
+
     deadline = int(time.time()) + 86400
     criteria_json = json.dumps(CRITERIA)
 
@@ -336,30 +375,31 @@ def test_cancel_task_lifecycle(client, deployer, agent_account, contract_address
         value=ESCROW_WEI,
     )
     client.wait_for_transaction_receipt(create_tx, retries=40, interval=3000)
-    wait_for_block_sync(6)
-
-    task_count = client.read_contract(
-        address=contract_address,
-        function_name="get_task_count",
-        args=[],
-    )
-    task_id = f"task_{int(task_count) - 1}"
+    poll_task_status(client, contract_address, expected_task_id, "CREATED")
 
     cancel_tx = client.write_contract(
         address=contract_address,
         function_name="cancel_task",
-        args=[task_id],
+        args=[expected_task_id],
     )
     receipt = client.wait_for_transaction_receipt(cancel_tx, retries=40, interval=3000)
     assert receipt.get("status_name") in ("ACCEPTED", "FINALIZED")
 
-    wait_for_block_sync(6)
-
-    raw_task = client.read_contract(
-        address=contract_address,
-        function_name="get_task",
-        args=[task_id],
-    )
-    task = json.loads(raw_task)
+    task = poll_task_status(client, contract_address, expected_task_id, "CANCELLED")
     assert task["status"] == "CANCELLED"
     assert task["settled_at"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Escrow Accounting and Tracking
+# ---------------------------------------------------------------------------
+
+def test_escrow_accounting_tracking(client, contract_address):
+    """Verify get_total_escrow_locked returns a valid integer string."""
+    locked = client.read_contract(
+        address=contract_address,
+        function_name="get_total_escrow_locked",
+        args=[],
+    )
+    assert isinstance(locked, str)
+    assert int(locked) >= 0
