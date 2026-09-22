@@ -1,0 +1,4 @@
+genlayer-py==0.16.3
+genlayer-test==0.29.2
+genvm-linter==0.11.0
+pytest==9.1.1

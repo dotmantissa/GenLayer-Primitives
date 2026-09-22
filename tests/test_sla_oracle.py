@@ -18,13 +18,28 @@ Tested functionality:
   10. Stake reclamation lifecycle via reclaim_stake
 """
 
+import base64
 import json
+import os
 import time
+from pathlib import Path
+
 import pytest
 from genlayer_py import create_client, studionet, create_account
+from gltest.assertions import tx_execution_succeeded
 
-DEPLOYER_KEY = "0xd4479070c2a31da31a01e732ca51707132bacdb480aae432a0c8bd0b91eba4b7"
-LIVE_CONTRACT_ADDRESS = "0x8C823BD8089ceE09be130C4E71F42D46DF863e01"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LIVE_CONTRACT_ADDRESS = os.environ.get("SLA_ORACLE_ADDRESS") or json.loads(
+    (PROJECT_ROOT / "artifacts/deployment.json").read_text()
+)["contractAddress"]
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.environ.get("GENLAYER_PRIVATE_KEY"),
+        reason="Set GENLAYER_PRIVATE_KEY to explicitly enable live network tests",
+    ),
+]
 
 SLA_DOCUMENT_URL = "https://aws.amazon.com/s3/sla/"
 THRESHOLD_BPS = 9990         # 99.90% availability
@@ -34,7 +49,7 @@ STAKE_WEI = 10**16           # 0.01 GEN
 
 @pytest.fixture(scope="session")
 def client():
-    account = create_account(DEPLOYER_KEY)
+    account = create_account(os.environ["GENLAYER_PRIVATE_KEY"])
     return create_client(chain=studionet, account=account)
 
 
@@ -73,6 +88,15 @@ def test_contract_schema_and_methods(client, contract_address):
     assert methods["register_sla"]["payable"] is True
     assert methods["get_sla"]["readonly"] is True
     assert methods["get_claim"]["readonly"] is True
+
+
+def test_deployed_source_matches_contract(client, contract_address):
+    response = client.provider.make_request(
+        method="gen_getContractCode", params=[contract_address]
+    )
+    assert "error" not in response
+    deployed_code = base64.b64decode(response["result"], validate=True)
+    assert deployed_code == (PROJECT_ROOT / "contracts/sla_enforcement_oracle.py").read_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +159,7 @@ def test_register_sla_and_read_state(client, deployer, contract_address):
     assert tx_hash is not None
 
     receipt = client.wait_for_transaction_receipt(tx_hash, retries=40, interval=3000)
+    assert tx_execution_succeeded(receipt)
     assert receipt.get("status_name") in ("ACCEPTED", "FINALIZED")
 
     sla_id = f"{deployer.address.lower()}:{period_start}"
@@ -178,7 +203,8 @@ def test_compute_max_penalty(client, deployer, contract_address):
         ],
         value=STAKE_WEI,
     )
-    client.wait_for_transaction_receipt(tx_hash, retries=40, interval=3000)
+    receipt = client.wait_for_transaction_receipt(tx_hash, retries=40, interval=3000)
+    assert tx_execution_succeeded(receipt)
 
     sla_id = f"{deployer.address.lower()}:{period_start}"
     time.sleep(2)
@@ -233,7 +259,8 @@ def test_claim_submission_and_verdict(client, deployer, contract_address):
         ],
         value=STAKE_WEI,
     )
-    client.wait_for_transaction_receipt(reg_tx, retries=40, interval=3000)
+    reg_receipt = client.wait_for_transaction_receipt(reg_tx, retries=40, interval=3000)
+    assert tx_execution_succeeded(reg_receipt)
 
     sla_id = f"{deployer.address.lower()}:{period_start}"
 
@@ -250,6 +277,7 @@ def test_claim_submission_and_verdict(client, deployer, contract_address):
         args=[sla_id, evidence_urls, measured_availability, incident_description],
     )
     receipt = client.wait_for_transaction_receipt(claim_tx, retries=60, interval=4000)
+    assert tx_execution_succeeded(receipt)
     assert receipt.get("status_name") in ("ACCEPTED", "FINALIZED")
     assert receipt.get("result_name") in ("MAJORITY_AGREE", "UNANIMOUS_AGREE")
 
@@ -266,6 +294,17 @@ def test_claim_submission_and_verdict(client, deployer, contract_address):
     assert claim["adjudicated"] is True
     assert isinstance(claim["breach_confirmed"], bool)
     assert isinstance(claim["measured_deficit_bps"], int)
+    assert 0 <= claim["measured_deficit_bps"] <= 10000
+    if not claim["breach_confirmed"]:
+        assert claim["measured_deficit_bps"] == 0
+    expected_penalty = min(
+        STAKE_WEI * claim["measured_deficit_bps"] // THRESHOLD_BPS,
+        STAKE_WEI * PENALTY_CAP_BPS // 10000,
+    )
+    assert int(claim["penalty_wei"]) == expected_penalty
+    assert int(client.read_contract(
+        address=contract_address, function_name="get_claim_count", args=[sla_id]
+    )) == 1
     assert len(claim["verdict_reasoning"]) > 0
 
 
@@ -292,7 +331,8 @@ def test_stake_reclaim_lifecycle(client, deployer, contract_address):
         ],
         value=STAKE_WEI,
     )
-    client.wait_for_transaction_receipt(reg_tx, retries=40, interval=3000)
+    reg_receipt = client.wait_for_transaction_receipt(reg_tx, retries=40, interval=3000)
+    assert tx_execution_succeeded(reg_receipt)
 
     sla_id = f"{deployer.address.lower()}:{period_start}"
     time.sleep(2)
@@ -303,6 +343,7 @@ def test_stake_reclaim_lifecycle(client, deployer, contract_address):
         args=[sla_id],
     )
     reclaim_receipt = client.wait_for_transaction_receipt(reclaim_tx, retries=40, interval=3000)
+    assert tx_execution_succeeded(reclaim_receipt)
     assert reclaim_receipt.get("status_name") in ("ACCEPTED", "FINALIZED")
 
     time.sleep(3)

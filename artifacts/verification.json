@@ -1,0 +1,92 @@
+{
+  "contractAddress": "0x04bfadd3273Bd7F50B2B3b316ACcfBe8a0a9B59F",
+  "sourceSha256": "d797df82d686028f863bf1057d6d64956f42a84b95c2574e110c6f1f8afc43e3",
+  "network": "studionet",
+  "genvmCheck": {
+    "command": "genvm-lint check contracts/sla_enforcement_oracle.py --json",
+    "lint": "PASS",
+    "sdkValidation": "PASS"
+  },
+  "directTests": {
+    "command": "pytest tests/direct/ -v",
+    "passed": 267,
+    "sdkVersion": "v0.2.16",
+    "validatorExecution": "Explicit direct_vm.run_validator calls against the captured contract validator",
+    "deficitMismatchCoverage": "Every delta from -101 through -1 and 1 through 101, plus 0/1 and 9999/10000 boundaries",
+    "transferCoverage": "Stored penalty, provider/SLA balance deductions, and exact finalized emit_transfer requests; caps, rounding, zero payouts, and duplicate execution",
+    "transferDeficitsBps": [1, 99, 100, 140, 4995, 4996, 9990, 10000]
+  },
+  "preFixReproduction": {
+    "commit": "b29caff",
+    "test": "tests/direct/test_deficit_consensus.py::test_validator_rejects_every_nearby_deficit[-100]",
+    "result": "FAIL: original validator accepted a 100 bps mismatch"
+  },
+  "liveTests": {
+    "command": "pytest tests/test_sla_oracle.py -v -s",
+    "requiredEnvironment": "GENLAYER_PRIVATE_KEY",
+    "passed": 10,
+    "deployedSourceMatches": true,
+    "claim": {
+      "claimKey": "0xbc1399c55538ec034d4da550c03c34ae0c357f53:1790081606:0",
+      "breachConfirmed": false,
+      "measuredDeficitBps": 0,
+      "penaltyWei": "0"
+    },
+    "transactions": [
+      {
+        "operation": "register_sla",
+        "transactionHash": "0x5ff906245a7932dc26d2090af378277de0325888b51f5f6a6f8f4f259788aa8f",
+        "status": "FINALIZED",
+        "executionResult": "SUCCESS",
+        "consensusResult": "MAJORITY_AGREE",
+        "initialValidators": 5,
+        "leaderOnly": false
+      },
+      {
+        "operation": "register_sla_for_cap_check",
+        "transactionHash": "0xb498541ebbd7434c9035175bca3d76f4004216f8eeb9f07420766e03a09a5862",
+        "status": "FINALIZED",
+        "executionResult": "SUCCESS",
+        "consensusResult": "MAJORITY_AGREE",
+        "initialValidators": 5,
+        "leaderOnly": false
+      },
+      {
+        "operation": "register_sla_for_claim",
+        "transactionHash": "0x0443f1830260ea1d9e34ad2a4919a9affc9badfd37ca629b3d46b9b0ea5a4563",
+        "status": "FINALIZED",
+        "executionResult": "SUCCESS",
+        "consensusResult": "MAJORITY_AGREE",
+        "initialValidators": 5,
+        "leaderOnly": false
+      },
+      {
+        "operation": "submit_claim",
+        "transactionHash": "0x324d3e8523e190e6e95d6191fc45a702bb2720b639996b79d7fb7c1525bb2657",
+        "status": "FINALIZED",
+        "executionResult": "SUCCESS",
+        "consensusResult": "MAJORITY_AGREE",
+        "initialValidators": 5,
+        "leaderOnly": false
+      },
+      {
+        "operation": "register_sla_for_reclaim",
+        "transactionHash": "0x1bea9a628e333f9bf244895afc346f156e86e471bc65d53a402dbbf35bf3855e",
+        "status": "FINALIZED",
+        "executionResult": "SUCCESS",
+        "consensusResult": "MAJORITY_AGREE",
+        "initialValidators": 5,
+        "leaderOnly": false
+      },
+      {
+        "operation": "reclaim_stake",
+        "transactionHash": "0x8855d19a1cbf130c2470d507c14da38f87cb122112dc23623839b4cd676a0ef0",
+        "status": "FINALIZED",
+        "executionResult": "SUCCESS",
+        "consensusResult": "MAJORITY_AGREE",
+        "initialValidators": 5,
+        "leaderOnly": false
+      }
+    ]
+  }
+}

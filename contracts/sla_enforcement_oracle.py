@@ -47,8 +47,8 @@ leader/validator pair:
   - Validator function: independently fetches the same SLA document and the
     same evidence URLs. It evaluates the leader's verdict against its own
     independent reading of the sources. It accepts the verdict only if the
-    breach determination (yes/no) and the measured deficit percentage both agree
-    within a defined tolerance.
+    breach determination (yes/no) and the integer measured deficit in basis
+    points agree exactly. That same validated deficit drives the penalty.
 
 Contract Lifecycle
 ------------------
@@ -174,6 +174,20 @@ def _coerce_bool(raw: typing.Any) -> bool:
     if txt in ("false", "no", "0", "no_breach", "rejected", "dismissed"):
         return False
     return False
+
+
+def _payout_fields(verdict: dict) -> tuple[bool, int]:
+    breach_confirmed = verdict.get("breach_confirmed")
+    deficit_bps = verdict.get("measured_deficit_bps")
+    if not isinstance(breach_confirmed, bool):
+        raise gl.vm.UserError("[LLM_ERROR] Verdict breach_confirmed must be a boolean")
+    if not isinstance(deficit_bps, int) or isinstance(deficit_bps, bool):
+        raise gl.vm.UserError("[LLM_ERROR] Verdict measured_deficit_bps must be an integer")
+    if not 0 <= deficit_bps <= 10000:
+        raise gl.vm.UserError("[LLM_ERROR] Verdict deficit must be between 0 and 10000 bps")
+    if not breach_confirmed and deficit_bps != 0:
+        raise gl.vm.UserError("[LLM_ERROR] A no-breach verdict must have zero deficit")
+    return breach_confirmed, deficit_bps
 
 
 # ---------------------------------------------------------------------------
@@ -519,27 +533,13 @@ If evidence is ambiguous, incomplete, or could reflect client-side issues rather
                 leaders_dict = leaders_raw
 
             try:
+                leader_breach, leader_deficit = _payout_fields(leaders_dict)
                 mine = leader_fn()
+                my_breach, my_deficit = _payout_fields(mine)
             except Exception:
                 return False
 
-            leader_breach = _coerce_bool(leaders_dict.get("breach_confirmed", False))
-            my_breach = bool(mine["breach_confirmed"])
-
-            if leader_breach != my_breach:
-                return False
-
-            try:
-                leader_deficit = int(leaders_dict.get("measured_deficit_bps", 0))
-            except Exception:
-                leader_deficit = 0
-
-            my_deficit = int(mine["measured_deficit_bps"])
-
-            if abs(leader_deficit - my_deficit) > 100:
-                return False
-
-            return True
+            return leader_breach == my_breach and leader_deficit == my_deficit
 
         jury_result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
         if hasattr(jury_result, "get") and not isinstance(jury_result, dict):
@@ -557,11 +557,7 @@ If evidence is ambiguous, incomplete, or could reflect client-side issues rather
         # Deterministic: compute penalty and persist verdict
         # -------------------------------------------------------------------
 
-        breach_confirmed = _coerce_bool(verdict.get("breach_confirmed", False))
-        try:
-            deficit_bps = int(verdict.get("measured_deficit_bps", 0))
-        except Exception:
-            deficit_bps = 0
+        breach_confirmed, deficit_bps = _payout_fields(verdict)
 
         reasoning = str(verdict.get("reasoning", ""))[:500]
         evidence_quality = str(verdict.get("evidence_quality", "unknown"))

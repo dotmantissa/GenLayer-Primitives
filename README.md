@@ -9,10 +9,14 @@ The SLA Enforcement Oracle eliminates the friction, legal overhead, and trust re
 - Network: GenLayer Studio Network (studionet)
 - Chain ID: 61999
 - RPC Endpoint: https://studio.genlayer.com/api
-- Contract Address: `0x8C823BD8089ceE09be130C4E71F42D46DF863e01`
-- Deployment Transaction: `0xfb6ac85813974e18e38d33037093270aca80c3ea45bd70e5c7879faebfd276c5`
+- Contract Address: `0x04bfadd3273Bd7F50B2B3b316ACcfBe8a0a9B59F`
+- Explorer: [View the fixed contract](https://explorer-studio.genlayer.com/address/0x04bfadd3273Bd7F50B2B3b316ACcfBe8a0a9B59F)
+- Deployment Transaction: `0x42d8f44cc16eb1c58ef247ffcc1037ef58179681d5e3197ce1af3b6363d0e4ac`
 - Deployer Address: `0xBC1399c55538eC034d4Da550C03c34Ae0C357f53`
 - GenVM Runner: `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`
+- Source SHA-256: `d797df82d686028f863bf1057d6d64956f42a84b95c2574e110c6f1f8afc43e3`
+
+This finalized deployment contains the exact-deficit consensus fix. The previous instance, `0x8C823BD8089ceE09be130C4E71F42D46DF863e01`, retains the unsafe tolerance and is superseded: use the new address for new SLAs. Existing stakes and claims are not migrated or modified.
 
 ## The Problem
 
@@ -57,7 +61,7 @@ The SLA Enforcement Oracle leverages GenLayer's Optimistic Democracy consensus:
 |  - Fetches SLA document              - Independently fetch  |
 |  - Fetches evidence URLs             - Independently verify |
 |  - Runs LLM prompt                   - Compare verdicts     |
-|  - Proposes verdict JSON             - Enforce tolerance    |
+|  - Proposes verdict JSON             - Bind exact deficit   |
 |                                                             |
 |                   Equivalence Principle                     |
 |           (Majority / Unanimous Agreement)                  |
@@ -87,7 +91,11 @@ Consensus for non-deterministic web retrieval and LLM evaluation is governed by 
    - Validates that the leader proposal conforms to the strict schema.
    - Independently performs web retrieval of the SLA and evidence.
    - Evaluates the claim against its own LLM assessment.
-   - Accepts the proposal if both nodes agree on the binary breach verdict (`breach_confirmed`) and their calculated availability deficits agree within a tolerance band of 100 basis points (1.00%).
+   - Accepts the proposal only when both nodes agree exactly on the boolean `breach_confirmed` and integer `measured_deficit_bps`. Even a one-basis-point disagreement is rejected; reasoning text may differ.
+   - Requires an explicit integer deficit between 0 and 10000, with zero deficit for a no-breach verdict. Missing, malformed, or coerced proposal fields are rejected.
+   - Uses the same payout-field validation after consensus, then stores and calculates the penalty from that exact agreed deficit. There is no tolerance band or separate unbound payout value.
+
+Exact agreement prioritizes settlement safety: ambiguous evidence may cause validator disagreement rather than accepting materially different payouts.
 
 ## Contract Specification
 
@@ -165,9 +173,9 @@ Consensus for non-deterministic web retrieval and LLM evaluation is governed by 
 
 Penalties are proportional to the severity of the deficit and strictly capped by the configured maximum penalty parameter:
 
-1. Deficit Calculation:
-   `deficit_bps = threshold_pct_bps - measured_availability_bps`
-   If `deficit_bps <= 0`, penalty is zero.
+1. Consensus-Bound Deficit:
+   `deficit_bps = verdict["measured_deficit_bps"]`
+   Validators must independently agree on this exact integer shortfall below the SLA threshold. The consumer's submitted availability is evidence input, not an authoritative payout amount. If there is no confirmed breach or the agreed deficit is zero, the penalty is zero.
 
 2. Proportional Scaling:
    `raw_penalty = (stake_wei * deficit_bps) // threshold_pct_bps`
@@ -192,7 +200,7 @@ PRIVATE_KEY = "0x..."
 account = create_account(PRIVATE_KEY)
 client = create_client(chain=studionet, account=account)
 
-ORACLE_ADDRESS = "0x8C823BD8089ceE09be130C4E71F42D46DF863e01"
+ORACLE_ADDRESS = "0x04bfadd3273Bd7F50B2B3b316ACcfBe8a0a9B59F"
 
 # 1. Provider: Register an SLA
 period_start = int(time.time())
@@ -257,7 +265,7 @@ const client = createClient({
   account: createAccount("0x...privateKey"),
 });
 
-const ORACLE_ADDRESS = "0x8C823BD8089ceE09be130C4E71F42D46DF863e01";
+const ORACLE_ADDRESS = "0x04bfadd3273Bd7F50B2B3b316ACcfBe8a0a9B59F";
 
 // Read SLA status
 async function checkSLA(slaId: string) {
@@ -282,15 +290,32 @@ async function checkClaim(claimKey: string) {
 
 ## Running the Test Suite
 
-The test suite validates contract operations directly against the live GenLayer network:
+Use Python 3.12 or newer for the pinned GenVM SDK:
 
 ```bash
-# Install dependencies
-pip install genlayer-py pytest
+# Install verification dependencies
+python3.12 -m pip install -r requirements-dev.txt
 
-# Run the end-to-end test suite
-pytest tests/test_sla_oracle.py -v
+# Lint before testing
+genvm-lint check contracts/sla_enforcement_oracle.py
+
+# Run offline consensus and payout regressions
+pytest tests/direct/ -v
 ```
+
+The direct suite explicitly invokes the contract's captured validator with `direct_vm.run_validator`; ordinary leader-only direct execution does not test consensus. It checks every mismatch from 1 through 100 bps in both directions, adjacent boundary values, malformed proposals, independent evidence retrieval, and exact agreement despite different reasoning. It also checks that stored penalties and finalized transfer requests use the same agreed deficit, including integer rounding, caps, and zero payouts.
+
+The generic `gltest` pytest plugin is disabled in `pyproject.toml` because its startup clears the configured artifacts directory. The direct-test plugin remains enabled, and the SDK-based live tests do not require that startup hook.
+
+The end-to-end suite additionally verifies the deployed source bytes, successful execution receipts (not just accepted/finalized status), and the consensus-deficit-to-penalty formula against the live GenLayer network. It is skipped unless `GENLAYER_PRIVATE_KEY` is explicitly set, and reads the current contract address from `artifacts/deployment.json`. Never commit private keys. To run it after securely setting that environment variable:
+
+```bash
+pytest tests/test_sla_oracle.py -v -s
+```
+
+Set `SLA_ORACLE_ADDRESS` to override the recorded deployment when testing another instance.
+
+Verification results and transaction hashes are recorded in [artifacts/verification.json](artifacts/verification.json): 267 offline regressions and 10 live tests passed, and all six live write transactions finalized successfully with five initial validators. The live claim was rejected with zero deficit and zero penalty; positive payout and transfer-amount checks are covered by the direct suite.
 
 ## Project Structure
 
@@ -299,10 +324,14 @@ sla-enforcement-oracle/
 ├── contracts/
 │   └── sla_enforcement_oracle.py   # Core Intelligent Contract
 ├── tests/
+│   ├── direct/
+│   │   └── test_deficit_consensus.py # Offline validator and payout regressions
 │   └── test_sla_oracle.py          # End-to-end integration test suite
 ├── artifacts/
-│   └── deployment.json             # Deployment metadata and network details
+│   ├── deployment.json             # Deployment metadata and network details
+│   └── verification.json           # Test results and finalized transaction evidence
 ├── pyproject.toml                  # Python package and dependency configuration
+├── requirements-dev.txt            # Pinned verification dependencies
 ├── gltest.config.yaml              # GenLayer test network definitions
 └── README.md                       # Architecture, specification, and integration guide
 ```
